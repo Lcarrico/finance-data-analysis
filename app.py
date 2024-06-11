@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
-from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
 
 # Title of the app
 st.sidebar.title("Finance Data Analysis App")
