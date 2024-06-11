@@ -1,12 +1,10 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
-from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
 
 def get_input():
     start_date = st.sidebar.text_input("Start Date", "2024-05-01")
@@ -15,27 +13,25 @@ def get_input():
     rolling_window_count = st.sidebar.number_input("Rolling Window Count", min_value=6, max_value=10, value=6)
     return start_date, end_date, num_components, rolling_window_count
 
-def get_data_from_db(start_date, end_date):
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS
-    )
-    query = f"""
-    SELECT date, symbol, open, close FROM reporting.mtd_daily_stock_data
-    WHERE date BETWEEN '{start_date}' AND '{end_date}'
-    ORDER BY date
-    """
-    df = pd.read_sql(query, conn)
-    conn.close()
+def get_data_from_csv(start_date, end_date):
+    # Read the CSV file
+    df = pd.read_csv('sp500_stocks.csv')
+    
+    # Convert the 'Date' column to datetime format
+    df['Date'] = pd.to_datetime(df['Date'])
+    
+    # Filter the dataframe based on the date range
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
+    df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+    
     return df
 
 def add_daily_return_column(data):
-    data['daily_return'] = (data['open'] - data['close']) / data['close']
+    data['daily_return'] = (data['Open'] - data['Close']) / data['Close']
 
 def calculate_cumulative_returns(data):
-    data['cumulative_return'] = (1 + data['daily_return']).groupby(data['symbol']).cumprod() - 1
+    data['cumulative_return'] = (1 + data['daily_return']).groupby(data['Symbol']).cumprod() - 1
 
 def run_pca(data, n_components):
     pca = PCA(n_components=n_components)
@@ -62,7 +58,6 @@ def compare_returns(actual, predicted):
     st.write(f"Standard Deviation of Actual Returns: {actual.std()}")
     st.write(f"Standard Deviation of Predicted Returns: {predicted.std()}")
 
-
 # Function to create rolling windows
 def create_rolling_windows_gen(window_size):
     def create_rolling_windows(group):
@@ -70,66 +65,58 @@ def create_rolling_windows_gen(window_size):
         for i in range(len(group) - window_size + 1):
             window = group.iloc[i:i + window_size]
             to_append = {
-                'symbol': window['symbol'].iloc[0],
-                'date': window['date'].iloc[-1]
-                # ,  # Take the last date in the window
-                # 'day_1': window['closing_value'].iloc[0],
-                # 'day_2': window['closing_value'].iloc[1],
-                # 'day_3': window['closing_value'].iloc[2]
+                'Symbol': window['Symbol'].iloc[0],
+                'Date': window['Date'].iloc[-1]
             }
-            for i in range(len(window['closing_value'])):
-                to_append[f'day_{i+1}'] = window['closing_value'].iloc[i]
+            for i in range(len(window['Closing_Value'])):
+                to_append[f'day_{i+1}'] = window['Closing_Value'].iloc[i]
 
             windows.append(to_append)
 
         return pd.DataFrame(windows)
     return create_rolling_windows
 
-
 def show():
     # Get user input
     start_date, end_date, num_components, rolling_window_count = get_input()
 
-    # Fetch data from the database
-    df = get_data_from_db(start_date, end_date)
-    # st.dataframe(df)
+    # Fetch data from the CSV file
+    df = get_data_from_csv(start_date, end_date)
 
     # Add daily return column
     add_daily_return_column(df)
 
     # Prepare data for PCA
-    daily_returns = df.pivot(index='symbol', columns='date', values='daily_return').fillna(0)
+    daily_returns = df.pivot(index='Symbol', columns='Date', values='daily_return').fillna(0)
 
     # Calculate cumulative returns
     st.write('## Daily return and Cumulative return values')
     calculate_cumulative_returns(df)
-    # st.dataframe(df)
 
     # Prepare cumulative returns for PCA
-    cumulative_returns_series = df.groupby('symbol')['cumulative_return'].last().dropna()
+    cumulative_returns_series = df.groupby('Symbol')['cumulative_return'].last().dropna()
     valid_symbols = cumulative_returns_series.index
 
     # Ensure alignment between PCA data and cumulative returns
     daily_returns = daily_returns.loc[valid_symbols]
     
     # Melt the dataframe
-    melted_df = daily_returns.reset_index().melt(id_vars=['symbol'], var_name='date', value_name='closing_value')
+    melted_df = daily_returns.reset_index().melt(id_vars=['Symbol'], var_name='Date', value_name='Closing_Value')
 
     # Convert date to datetime
-    melted_df['date'] = pd.to_datetime(melted_df['date'])
+    melted_df['Date'] = pd.to_datetime(melted_df['Date'])
 
     # Sort by symbol and date
-    melted_df = melted_df.sort_values(by=['symbol', 'date'])
+    melted_df = melted_df.sort_values(by=['Symbol', 'Date'])
 
     # Apply the function to each group
-    result = melted_df.groupby('symbol').apply(create_rolling_windows_gen(rolling_window_count)).reset_index(drop=True)
+    result = melted_df.groupby('Symbol').apply(create_rolling_windows_gen(rolling_window_count)).reset_index(drop=True)
     st.dataframe(result)
     
     # Run PCA
     X = result[[f'day_{i}' for i in range(1, rolling_window_count)]]
     y = result[f'day_{rolling_window_count}']
     pca, pca_data = run_pca(X, num_components)
-
 
     # Train linear regression model
     model = train_linear_regression(pca_data, y)

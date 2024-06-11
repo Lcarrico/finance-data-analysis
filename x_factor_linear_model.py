@@ -1,11 +1,9 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
 
 def get_input():
     start_date = st.sidebar.text_input("Start Date", "2024-05-01")
@@ -13,27 +11,25 @@ def get_input():
     num_components = st.sidebar.number_input("Number of PCA Components", min_value=1, max_value=10, value=8)
     return start_date, end_date, num_components
 
-def get_data_from_db(start_date, end_date):
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS
-    )
-    query = f"""
-    SELECT date, symbol, open, close FROM reporting.mtd_daily_stock_data
-    WHERE date BETWEEN '{start_date}' AND '{end_date}'
-    ORDER BY date
-    """
-    df = pd.read_sql(query, conn)
-    conn.close()
+def get_data_from_csv(start_date, end_date):
+    # Read the CSV file
+    df = pd.read_csv('sp500_stocks.csv')
+    
+    # Convert the 'Date' column to datetime format
+    df['Date'] = pd.to_datetime(df['Date'])
+    
+    # Filter the dataframe based on the date range
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
+    df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+    
     return df
 
 def add_daily_return_column(data):
-    data['daily_return'] = (data['open'] - data['close']) / data['close']
+    data['daily_return'] = (data['Open'] - data['Close']) / data['Close']
 
 def calculate_cumulative_returns(data):
-    data['cumulative_return'] = (1 + data['daily_return']).groupby(data['symbol']).cumprod() - 1
+    data['cumulative_return'] = (1 + data['daily_return']).groupby(data['Symbol']).cumprod() - 1
 
 def run_pca(data, n_components):
     pca = PCA(n_components=n_components)
@@ -63,15 +59,15 @@ def show():
     # Get user input
     start_date, end_date, num_components = get_input()
 
-    # Fetch data from the database
-    df = get_data_from_db(start_date, end_date)
+    # Fetch data from the CSV file
+    df = get_data_from_csv(start_date, end_date)
     # st.dataframe(df)
 
     # Add daily return column
     add_daily_return_column(df)
 
     # Prepare data for PCA
-    daily_returns = df.pivot(index='symbol', columns='date', values='daily_return').fillna(0)
+    daily_returns = df.pivot(index='Symbol', columns='Date', values='daily_return').fillna(0)
 
     # Calculate cumulative returns
     st.write('## Daily return and Cumulative return values')
@@ -79,7 +75,7 @@ def show():
     # st.dataframe(df)
 
     # Prepare cumulative returns for PCA
-    cumulative_returns_series = df.groupby('symbol')['cumulative_return'].last().dropna()
+    cumulative_returns_series = df.groupby('Symbol')['cumulative_return'].last().dropna()
     valid_symbols = cumulative_returns_series.index
 
     st.dataframe(daily_returns)

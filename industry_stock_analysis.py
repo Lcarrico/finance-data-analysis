@@ -1,16 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import psycopg2
-from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import seaborn as sns
 import matplotlib.pyplot as plt
 import altair as alt
-
-
 
 def get_input():
     start_date = st.sidebar.text_input("Start Date", "2024-05-01")
@@ -19,29 +15,27 @@ def get_input():
     num_symbols_per_cluster = st.sidebar.number_input("Number of symbols to display per cluster", min_value=1, max_value=100, value=3)
     return start_date, end_date, num_clusters, num_symbols_per_cluster
 
-def get_data_from_db(start_date, end_date):
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS
-    )
-    query = f"""
-    SELECT date, symbol, close, volume FROM reporting.mtd_daily_stock_data
-    WHERE date BETWEEN '{start_date}' AND '{end_date}'
-    ORDER BY date, symbol
-    """
-    df = pd.read_sql(query, conn)
-    conn.close()
+def get_data_from_csv(start_date, end_date):
+    # Read the CSV file
+    df = pd.read_csv('sp500_stocks.csv')
+    
+    # Convert the 'Date' column to datetime format
+    df['Date'] = pd.to_datetime(df['Date'])
+    
+    # Filter the dataframe based on the date range
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
+    df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+    
     return df
 
 def calculate_daily_returns(data):
-    data['daily_return'] = data.groupby('symbol')['close'].pct_change()
+    data['daily_return'] = data.groupby('Symbol')['Close'].pct_change()
     return data
 
 def prepare_feature_matrix(stock_df):
     # Pivot the dataframe to have symbols as columns and dates as rows
-    return_pivot = stock_df.pivot(index='date', columns='symbol', values='daily_return')
+    return_pivot = stock_df.pivot(index='Date', columns='Symbol', values='daily_return')
     
     # Fill missing values with 0
     return_pivot = return_pivot.fillna(0)
@@ -85,8 +79,8 @@ def get_top_symbols_per_cluster(cluster_df, stock_df, num_symbols_per_cluster):
     top_symbols_df_list = []
     for cluster in cluster_df['cluster'].unique():
         cluster_symbols = cluster_df[cluster_df['cluster'] == cluster]['symbol']
-        cluster_volumes = stock_df[stock_df['symbol'].isin(cluster_symbols)].groupby('symbol')['volume'].mean().reset_index()
-        top_symbols = cluster_volumes.nlargest(num_symbols_per_cluster, 'volume')['symbol']
+        cluster_volumes = stock_df[stock_df['Symbol'].isin(cluster_symbols)].groupby('Symbol')['Volume'].mean().reset_index()
+        top_symbols = cluster_volumes.nlargest(num_symbols_per_cluster, 'Volume')['Symbol']
         top_symbols_df_list.append(cluster_df[cluster_df['symbol'].isin(top_symbols)])
     top_symbols_df = pd.concat(top_symbols_df_list)
     return top_symbols_df
@@ -95,8 +89,8 @@ def show():
     # Get user input
     start_date, end_date, num_clusters, num_symbols_per_cluster = get_input()
 
-    # Fetch data from the database
-    stock_df = get_data_from_db(start_date, end_date)
+    # Fetch data from the CSV file
+    stock_df = get_data_from_csv(start_date, end_date)
 
     # Calculate daily returns for each stock and index
     stock_df = calculate_daily_returns(stock_df)
@@ -131,10 +125,10 @@ def show():
 
     # Identify under/over represented clusters
     st.write("## Average Values based on Clusters")
-    stock_avg_df = stock_df.groupby(['symbol']).mean()[['close', 'volume', 'daily_return']]
+    stock_avg_df = stock_df.groupby(['Symbol']).mean()[['Close', 'Volume', 'daily_return']]
     cluster_df = cluster_df.join(stock_avg_df, 'symbol', 'left')
 
-    cluster_avg_df = cluster_df[['x', 'y', 'cluster', 'close', 'volume', 'daily_return']].groupby(['cluster']).mean()[['x', 'y', 'close', 'volume', 'daily_return']]
+    cluster_avg_df = cluster_df[['x', 'y', 'cluster', 'Close', 'Volume', 'daily_return']].groupby(['cluster']).mean()[['x', 'y', 'Close', 'Volume', 'daily_return']]
     st.dataframe(cluster_avg_df)
     cluster_avg_df = cluster_avg_df.reset_index()
 
@@ -199,3 +193,7 @@ def show():
 
     st.write("## Over-represented Clusters by Count")
     st.dataframe(over_represented)
+
+# Run the Streamlit app
+if __name__ == '__main__':
+    show()
